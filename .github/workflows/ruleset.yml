@@ -19,7 +19,6 @@ on:
 
 permissions:
   contents: read
-  administration: write    # required to manage branch protection & rulesets
 
 jobs:
   # ── Job 1: Validate ruleset JSON files ─────────────────────────────────────
@@ -50,7 +49,7 @@ jobs:
 
       - name: Apply main branch ruleset
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           DRY_RUN:  ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           OWNER="${{ github.repository_owner }}"
@@ -91,7 +90,7 @@ jobs:
 
       - name: Verify ruleset applied
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           OWNER="${{ github.repository_owner }}"
           REPO="${{ github.event.repository.name }}"
@@ -108,7 +107,7 @@ jobs:
     steps:
       - name: Check main branch protection
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           OWNER="${{ github.repository_owner }}"
           REPO="${{ github.event.repository.name }}"
