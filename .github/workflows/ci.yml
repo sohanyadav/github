@@ -1,16 +1,19 @@
-name: CI — Lint & Test
+name: CI
+
+# Lightweight entry-point that delegates to the reusable test workflow.
+# Branch protection requires the "All Checks Passed" job from test.yml to pass.
 
 on:
   pull_request:
     branches: [main, dev]
   push:
-    branches: [dev]
+    branches: [main, dev]
 
 jobs:
-  test:
-    name: Lint & Test
+  # Quick sanity check — full testing runs in test.yml
+  setup-check:
+    name: Setup Check
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -24,14 +27,10 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run linter
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage
-          path: coverage/
+      - name: Verify project structure
+        run: |
+          echo "Checking required files..."
+          for f in src/app.js src/math.js tests/math.test.js package.json; do
+            [ -f "$f" ] && echo "  ✔ $f" || (echo "  ✘ $f missing" && exit 1)
+          done
+          echo "Project structure OK."
