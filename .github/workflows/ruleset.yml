@@ -1,17 +1,15 @@
-name: Apply Repository Rulesets
+name: Apply Branch Protection
 
 on:
-  # Run automatically when ruleset config files change
   push:
     branches: [main]
     paths:
       - '.github/rulesets/**'
 
-  # Allow manual trigger from the Actions tab
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Dry run — print changes without applying'
+        description: 'Dry run — print rules without applying'
         required: false
         default: 'false'
         type: choice
@@ -21,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  # ── Job 1: Validate ruleset JSON files ─────────────────────────────────────
+  # ── Job 1: Validate ruleset JSON ───────────────────────────────────────────
   validate:
     name: Validate Ruleset Config
     runs-on: ubuntu-latest
@@ -33,111 +31,93 @@ jobs:
         run: |
           echo "Validating ruleset JSON files..."
           for f in .github/rulesets/*.json; do
-            echo "  Checking $f"
-            python3 -m json.tool "$f" > /dev/null && echo "  ✔ $f is valid"
+            python3 -m json.tool "$f" > /dev/null && echo "  ✔ $f"
           done
-          echo "All ruleset files are valid JSON."
+          echo "All files are valid JSON."
 
-  # ── Job 2: Apply branch protection rulesets via GitHub API ─────────────────
-  apply-rulesets:
-    name: Apply Rulesets
+  # ── Job 2: Apply branch protection via classic API (works on personal repos) ─
+  apply-branch-protection:
+    name: Apply Branch Protection
     runs-on: ubuntu-latest
     needs: validate
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Apply main branch ruleset
+      - name: Apply protection to main
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           DRY_RUN:  ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           OWNER="${{ github.repository_owner }}"
           REPO="${{ github.event.repository.name }}"
-          RULESET_FILE=".github/rulesets/main-branch.json"
+
+          PAYLOAD=$(cat .github/rulesets/branch-protection.json)
 
           echo "Repository : $OWNER/$REPO"
-          echo "Ruleset    : $RULESET_FILE"
+          echo "Branch     : main"
           echo "Dry run    : $DRY_RUN"
 
           if [ "$DRY_RUN" = "true" ]; then
             echo ""
-            echo "── DRY RUN — ruleset that would be applied ──"
-            cat "$RULESET_FILE"
+            echo "── DRY RUN — rules that would be applied ──"
+            echo "$PAYLOAD" | python3 -m json.tool
             echo ""
             echo "Dry run complete. No changes applied."
             exit 0
           fi
 
-          # Check if ruleset already exists
-          EXISTING_ID=$(gh api \
-            repos/$OWNER/$REPO/rulesets \
-            --jq '.[] | select(.name == "main-branch-protection") | .id' 2>/dev/null || echo "")
+          gh api repos/$OWNER/$REPO/branches/main/protection \
+            --method PUT \
+            --input .github/rulesets/branch-protection.json
 
-          if [ -n "$EXISTING_ID" ]; then
-            echo "Updating existing ruleset (ID: $EXISTING_ID)..."
-            gh api repos/$OWNER/$REPO/rulesets/$EXISTING_ID \
-              --method PUT \
-              --input "$RULESET_FILE"
-            echo "✔ Ruleset updated."
-          else
-            echo "Creating new ruleset..."
-            gh api repos/$OWNER/$REPO/rulesets \
-              --method POST \
-              --input "$RULESET_FILE"
-            echo "✔ Ruleset created."
-          fi
+          echo "✔ Branch protection applied to main."
 
-      - name: Verify ruleset applied
+      - name: Apply protection to dev
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          DRY_RUN:  ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           OWNER="${{ github.repository_owner }}"
           REPO="${{ github.event.repository.name }}"
 
-          echo "Active rulesets on $OWNER/$REPO:"
-          gh api repos/$OWNER/$REPO/rulesets \
-            --jq '.[] | "  [\(.id)] \(.name) — enforcement: \(.enforcement)"'
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run — skipping dev branch."
+            exit 0
+          fi
 
-  # ── Job 3: Verify branch protection is active ──────────────────────────────
-  verify-branch-protection:
+          # Ensure dev branch exists before applying protection
+          if gh api repos/$OWNER/$REPO/branches/dev > /dev/null 2>&1; then
+            gh api repos/$OWNER/$REPO/branches/dev/protection \
+              --method PUT \
+              --input .github/rulesets/branch-protection.json
+            echo "✔ Branch protection applied to dev."
+          else
+            echo "⚠ dev branch does not exist yet — skipping."
+          fi
+
+  # ── Job 3: Verify protection is active ────────────────────────────────────
+  verify:
     name: Verify Branch Protection
     runs-on: ubuntu-latest
-    needs: apply-rulesets
+    needs: apply-branch-protection
     steps:
-      - name: Check main branch protection
+      - name: Verify main branch protection
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           OWNER="${{ github.repository_owner }}"
           REPO="${{ github.event.repository.name }}"
 
-          echo "Checking branch protection on: main"
-          PROTECTION=$(gh api repos/$OWNER/$REPO/branches/main/protection 2>&1 || echo "NOT_PROTECTED")
-
-          if echo "$PROTECTION" | grep -q "NOT_PROTECTED\|404"; then
-            echo "⚠ main branch is NOT protected — check ruleset enforcement setting."
-            exit 1
-          fi
-
-          echo "✔ main branch protection is active."
+          echo "── main branch protection ──"
+          gh api repos/$OWNER/$REPO/branches/main/protection \
+            --jq '{
+              required_approvals: .required_pull_request_reviews.required_approving_review_count,
+              dismiss_stale_reviews: .required_pull_request_reviews.dismiss_stale_reviews,
+              require_status_checks: .required_status_checks.contexts,
+              enforce_admins: .enforce_admins.enabled,
+              allow_force_pushes: .allow_force_pushes.enabled,
+              allow_deletions: .allow_deletions.enabled
+            }'
           echo ""
-          echo "Required status checks:"
-          echo "$PROTECTION" | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          checks = data.get('required_status_checks', {}).get('contexts', [])
-          for c in checks:
-              print(f'  ✔ {c}')
-          " 2>/dev/null || echo "  (none configured yet)"
-
-          echo ""
-          echo "Required reviews:"
-          echo "$PROTECTION" | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          reviews = data.get('required_pull_request_reviews', {})
-          print(f'  Required approvals : {reviews.get(\"required_approving_review_count\", 0)}')
-          print(f'  Dismiss stale      : {reviews.get(\"dismiss_stale_reviews\", False)}')
-          print(f'  Require CODEOWNERS : {reviews.get(\"require_code_owner_reviews\", False)}')
-          " 2>/dev/null || echo "  (not configured)"
+          echo "✔ Verification complete."
