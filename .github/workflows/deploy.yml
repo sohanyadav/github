@@ -1,0 +1,43 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main   # → Production
+      - dev    # → Dev
+
+jobs:
+  deploy:
+    name: Deploy to ${{ github.ref_name == 'main' && 'Production' || 'Dev' }}
+    runs-on: ubuntu-latest
+
+    environment:
+      name: ${{ github.ref_name == 'main' && 'production' || 'dev' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests (safety check before deploy)
+        run: npm test
+
+      - name: Deploy
+        run: |
+          echo "Deploying branch: ${{ github.ref_name }}"
+          echo "Environment: ${{ github.ref_name == 'main' && 'production' || 'dev' }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Deployed by: ${{ github.actor }}"
+          # Replace the echo commands above with your real deploy script:
+          # e.g. ssh deploy@server, kubectl apply, aws s3 sync, etc.
+        env:
+          APP_SECRET: ${{ secrets.APP_SECRET }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
